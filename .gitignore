@@ -1,0 +1,6 @@
+data/*
+data_saved/*
+__pycache__/*
+*.pyc
+images/*
+*.pkl
