@@ -62,11 +62,19 @@ def facet_grid_hist(
         xmin = score_df.score.min()
         xmax = score_df.score.max()
         score_range = xmax - xmin
+
+        # remove outliers outside visible range
+        score_df = score_df.loc[(score_df.score >= xmin) & (score_df.score <= xmax)]
+
         unique_vals = np.sort(score_df.score.unique())
         n_unique = len(unique_vals)
         if n_unique < 30:
             min_diff = pd.Series(unique_vals).diff().min()
             binwidth = min_diff if min_diff > 0 else 1
+
+            n_bins = np.minimum(100, (xmax - xmin) / binwidth)
+            binwidth = (xmax - xmin) / n_bins
+
             # bins = score_range / binwidth
             bins = np.arange(xmin, xmax+binwidth, binwidth)
         else:
@@ -79,9 +87,11 @@ def facet_grid_hist(
             )
             if binwidth == 0:
                 n_bins = int(np.ceil(np.sqrt(score_df.groupby('group')['score'].count().mean())))
-                binwidth = score_range / n_bins
+                n_bins = np.minimum(n_bins, 100)
             else:
                 n_bins = np.ceil(score_range / binwidth).astype(int)
+                n_bins = np.minimum(n_bins, 100)
+            binwidth = score_range / n_bins
             bins = np.arange(xmin, xmax+binwidth, binwidth)
 
         if binwidth > score_range:
@@ -257,6 +267,8 @@ def error_divergence_plot(
     l1s = np.array([l[0] for l in loss_horizons])
     cis = np.array([l[1] for l in loss_horizons]).T
 
+    l1s[(l1s == 0) & (cis == 0).all(axis=0)] = np.nan
+
     sns.lineplot(
         x=labels,
         y=l1s,
@@ -299,6 +311,8 @@ def hist_subplots(
     """
     if axs is None:
         fig, axs = plt.subplots(np.ceil(len(plot_fns) / 2).astype(int), 2, figsize=figsize)
+        if len(plot_fns) % 2 == 1:
+            axs[-1, -1].remove()
     axs = axs.reshape(-1)
 
     for i, (name, fn) in enumerate(plot_fns.items()):
@@ -345,17 +359,21 @@ def spider_plot(
     save_path: Optional[str] = None,
 ) -> go.Figure:
 
-    assert len(scores_models) <= 4, "Only max 4 models can be compared at once"
+    assert len(scores_models) <= 5, "Only max 5 models can be compared at once"
 
     default_colors = [
         "rgba(0.12156863, 0.46666667, 0.70588235, 0.2)",
         "rgba(1.0, 0.59607843, 0.2, 0.2)",
         "rgba(0.16862745, 0.78039216, 0.45098039, 0.2)",
-        "rgba(0.90196078, 0.25098039, 0.25098039, 0.2)"
+        # "rgba(0.90196078, 0.25098039, 0.25098039, 0.2)", # too similar to prev.
+        "rgba(1.0, 1.0, 0.0, 0.2)", # yellow
+        "rgba(0.58039216, 0.40392157, 0.74117647, 0.2)",
     ]
 
     fig = go.Figure()
     for i, (model, scores) in enumerate(scores_models.items()):
+        remove_scores = {"ofi_up", "ofi_down", "ofi_stay"}
+        scores = {k: v for k, v in scores.items() if k not in remove_scores}
 
         # labels = [s.replace("_", "<br>") for s in list(scores.keys())]
         labels = []
@@ -411,7 +429,7 @@ def spider_plot(
         height=400,
         polar=dict(
             angularaxis=dict(
-                rotation=180 - 180/len(labels),
+                rotation=190 - 180/len(labels),
                 direction='clockwise'  # Set the rotation direction (clockwise or counterclockwise)
             ),
             radialaxis=dict(
@@ -431,8 +449,10 @@ def spider_plot(
             y=-0.2,#-0.4,  # Position it below the plot
             xanchor='center',  # Center the legend
             x=0.5,  # Position it horizontally centered
+            traceorder='normal',  # Keep the default order
+            itemsizing='constant',
         ),
-        font=dict(size=18),
+        font=dict(size=12),
     )
 
     # fig.write_image(f"images/spiderplt_{stock}_{metric_str}.png")
@@ -575,13 +595,15 @@ def loss_bars(
 
     data_.score = data_.score.str.replace('_', ' ').str.capitalize()
 
-    fig = plt.figure(figsize=(6, 3.6))
+    fig = plt.figure(figsize=(10, 3.6))
     # BAR PLOT
     ax = sns.barplot(
         data=data_,
         x="score",
         y="mean",
         hue="model",
+        width=0.7,
+        dodge=True,
     )
     # ERROR BARS
     # get x-coords of bars only (without the legend elements)
@@ -594,7 +616,7 @@ def loss_bars(
         yerr=y_err,
         fmt="none",
         c="k",
-        elinewidth=3
+        linewidth=1.0
     )
     plt.title(
         f'{metric.capitalize()} Loss ({stock})',
@@ -604,9 +626,21 @@ def loss_bars(
     plt.ylabel(f'{metric.capitalize()} Loss', fontsize=14)
     plt.xlabel('')
     # Customize tick labels
-    _ = plt.xticks(rotation=90)
+    labels = [tick.get_text() for tick in plt.gca().get_xticklabels()]
+    short_labels = [
+        ".".join([word[:3] if len(word) > 3 else word for word in label.split()])
+        for label in labels
+    ]
+    _ = plt.xticks(
+        ticks = plt.gca().get_xticks(),
+        labels = short_labels,
+        rotation=70,
+        ha="right",
+    )
     ax.tick_params(axis='x', labelsize=14)  # X tick labels font size
     ax.tick_params(axis='y', labelsize=14)  # Y tick labels font size
+
+    plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
 
     if save_path is not None:
         plt.savefig(
@@ -635,6 +669,18 @@ def _finish_plot(
 
 
 def get_plot_fn_uncond(score_df: pd.DataFrame) -> Callable[[str, plt.Axes], None]:
+    q1, q3 = score_df.score.quantile([0.25, 0.75])
+    iqr = q3 - q1
+    lower_bound = q1 - 2 * iqr
+    upper_bound = q3 + 2 * iqr
+    xmin = max(score_df.score.min(), lower_bound)
+    xmax = min(score_df.score.max(), upper_bound)
+    if xmin == xmax:
+        xmin, xmax = score_df.score.quantile([0.01, 0.99])
+    # remove outliers from dataframe for quicker plotting
+    # --> CAVE: can change appearance slightly if there are many outliers
+    score_df = score_df[(score_df.score >= xmin) & (score_df.score <= xmax)]
+
     unique_scores = score_df.score.unique()
     if unique_scores.shape[0] < 80:
         # discrete = True
@@ -651,14 +697,7 @@ def get_plot_fn_uncond(score_df: pd.DataFrame) -> Callable[[str, plt.Axes], None
         # xmin = max(mean - 3*std, score_df.score.min())
         # xmax = min(mean + 3*std, score_df.score.max())
         # get outliers based on quantiles
-        q1, q3 = score_df.score.quantile([0.25, 0.75])
-        iqr = q3 - q1
-        lower_bound = q1 - 2 * iqr
-        upper_bound = q3 + 2 * iqr
-        xmin = max(score_df.score.min(), lower_bound)
-        xmax = min(score_df.score.max(), upper_bound)
-        if xmin == xmax:
-            xmin, xmax = score_df.score.quantile([0.01, 0.99])
+
         sns.histplot(
             score_df,
             x="score",

@@ -114,9 +114,11 @@ def run_plotting(
                     horizon_length=div_horizon_length,
                     color=f"C{i_model}",
                     model_name=model,
-                    baseline_errors=baseline_errors_by_score[score_name]
+                    baseline_errors=baseline_errors_by_score.get(score_name, None)
                 )
                 for score_name, score_ in score_model.items()
+                    # skip OFI scores (averaged over 100 messages)
+                    if not score_name.startswith("ofi")
             }
             # only save once when the last model is plotted
             if i_model == len(score_stock) - 1:
@@ -127,7 +129,7 @@ def run_plotting(
                 plot_fns_uncond,
                 axs=axs,
                 figsize=(10, 22),
-                suptile=f"L1 Divergence {stock} {model}",
+                suptile=f"L1 Divergence {stock}",
                 save_path=save_path
             )
 

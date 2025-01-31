@@ -338,7 +338,7 @@ def run_benchmark(
     plot_fns = {}
 
     for score_name, score_config in scoring_config_dict.items():
-        print("Calculating scores and metrics for: ", score_name, end="\r")
+        print("Calculating scores and metrics for: ", score_name, end="\r\n")
 
         # conditional scoring
         if score_config.get("eval", None) is not None:
@@ -425,6 +425,9 @@ def summary_stats(
     return return_dict
 
 def _calc_summary_stats(loss_vals):
+    # missing scores get max loss of 1
+    loss_vals = np.nan_to_num(loss_vals, nan=1.)
+
     aggr_mean = np.mean(loss_vals, axis=-1)
     aggr_median = np.median(loss_vals, axis=-1)
 
